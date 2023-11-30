@@ -1,0 +1,5 @@
+
+(library
+  (name ccbor_reference)
+  (synopsis "reference implementation, for testing")
+  (libraries containers))
