@@ -29,3 +29,6 @@ val next_token : t -> token
     @raise End_of_file if there is no next token. *)
 
 val read_tree : t -> Tree.t
+
+val skip_tree : t -> unit
+(** Skip a whole subtree. *)

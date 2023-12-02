@@ -304,3 +304,29 @@ and read_kv (self : t) =
   let k = read_tree self in
   let v = read_tree self in
   k, v
+
+let rec skip_tree (self : t) : unit =
+  let module T = Tree in
+  match next_token self with
+  | True | False | Null | Undefined | Int _ | Int64 _ | Simple _ | Float _
+  | Bytes _ | Text _ ->
+    ()
+  | Array len ->
+    for _i = 1 to len do
+      skip_tree self
+    done
+  | Map len ->
+    for _i = 1 to 2 * len do
+      skip_tree self
+    done
+  | Tag _ -> skip_tree self
+  | Bytes_indefinite_start | Text_indefinite_start | Array_indefinite_start
+  | Map_indefinite_start ->
+    while
+      match next_token self with
+      | Indefinite_end -> false
+      | _ -> true
+    do
+      ()
+    done
+  | Indefinite_end -> raise Indefinite
