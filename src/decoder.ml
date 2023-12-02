@@ -211,3 +211,96 @@ let next_token (self : t) : token =
   | _ ->
     (* unreachable *)
     assert false
+
+let bytes_sub_ b i len =
+  if i = 0 && len = Bytes.length b then
+    b
+  else
+    Bytes.sub b i len
+
+let array_rev_in_place a =
+  let len = Array.length a in
+  if len > 0 then
+    for k = 0 to (len - 1) / 2 do
+      let t = a.(k) in
+      a.(k) <- a.(len - 1 - k);
+      a.(len - 1 - k) <- t
+    done
+
+let rec read_tree (self : t) : Tree.t =
+  let module T = Tree in
+  match next_token self with
+  | True -> T.Bool true
+  | False -> T.Bool false
+  | Null -> T.Null
+  | Undefined -> T.Undefined
+  | Int i -> T.Int (Int64.of_int i)
+  | Int64 i -> T.Int i
+  | Simple i -> T.Simple i
+  | Float f -> T.Float f
+  | Bytes (b, i, len) -> T.Bytes (bytes_sub_ b i len |> Bytes.unsafe_to_string)
+  | Text (b, i, len) -> T.Text (bytes_sub_ b i len |> Bytes.unsafe_to_string)
+  | Array len ->
+    let a = Array.init len (fun _ -> read_tree self) in
+    T.Array a
+  | Map len ->
+    let m = Array.init len (fun _ -> read_kv self) in
+    T.Map m
+  | Tag i ->
+    let v = read_tree self in
+    T.Tag (i, v)
+  | (Bytes_indefinite_start | Text_indefinite_start) as tok ->
+    let buf = Buffer.create 32 in
+    while
+      match next_token self with
+      | Text (b, i, len) | Bytes (b, i, len) ->
+        Buffer.add_subbytes buf b i len;
+        true
+      | Indefinite_end -> false
+      | _ -> failwith "unexpected token in indefinite text"
+    do
+      ()
+    done;
+    if tok == Bytes_indefinite_start then
+      T.Bytes (Buffer.contents buf)
+    else
+      T.Text (Buffer.contents buf)
+  | Array_indefinite_start ->
+    let l = ref [] in
+    while
+      match read_tree self with
+      | exception Indefinite -> false
+      | x ->
+        l := x :: !l;
+        true
+    do
+      ()
+    done;
+    let a = Array.of_list !l in
+    array_rev_in_place a;
+    T.Array a
+  | Map_indefinite_start ->
+    let l = ref [] in
+    let key = ref None in
+    while
+      match read_tree self with
+      | exception Indefinite -> false
+      | x ->
+        (match !key with
+        | None -> key := Some x
+        | Some k ->
+          key := None;
+          l := (k, x) :: !l);
+        true
+    do
+      ()
+    done;
+    let a = Array.of_list !l in
+    array_rev_in_place a;
+    T.Map a
+  | Indefinite_end -> raise Indefinite
+
+and read_kv (self : t) =
+  let k = read_tree self in
+  let v = read_tree self in
+  k, v
