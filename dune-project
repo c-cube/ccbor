@@ -1,5 +1,6 @@
 (lang dune 2.9)
 (name ccbor)
+(generate_opam_files true)
 
 (license MIT)
 (source (github c-cube/ccbor))
