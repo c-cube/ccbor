@@ -12,6 +12,10 @@ let create_sub b i len =
 
 let create b : t = create_sub b 0 (Bytes.length b)
 
+let create_string s : t = create (Bytes.unsafe_of_string s)
+
+let create_string_sub s i len : t = create_sub (Bytes.unsafe_of_string s) i len
+
 let[@inline] check_non_empty (self : t) : unit =
   if self.i >= self.last then raise End_of_file
 

@@ -4,15 +4,16 @@ type chunk = {
 }
 (** A chunk of data *)
 
+(** chunks of a fixed size *)
+let default_chunk_size = 256
+
 type t = {
   mutable cur: chunk;  (** Current chunk, not full *)
+  chunk_size: int;
   mutable prev_chunks: chunk list;
       (** list of previous chunks, most recent first *)
   mutable reuse_chunks: chunk list;  (** Chunks we can reuse *)
 }
-
-(** chunks of 1kiB *)
-let chunk_size = 1 * 1024
 
 module Chunk = struct
   type t = chunk
@@ -24,7 +25,7 @@ module Chunk = struct
 
   let[@inline] has_space_ (self : t) : bool = Bytes.length self.bs <> self.off
 
-  let[@inline] create () : t = { bs = Bytes.create chunk_size; off = 0 }
+  let[@inline] create ~size () : t = { bs = Bytes.create size; off = 0 }
 end
 
 let total_size (self : t) : int =
@@ -32,8 +33,13 @@ let total_size (self : t) : int =
     (fun acc c -> acc + Chunk.size c)
     (Chunk.size self.cur) self.prev_chunks
 
-let create () : t =
-  { cur = Chunk.create (); prev_chunks = []; reuse_chunks = [] }
+let create ?(chunk_size = default_chunk_size) () : t =
+  {
+    cur = Chunk.create ~size:chunk_size ();
+    chunk_size;
+    prev_chunks = [];
+    reuse_chunks = [];
+  }
 
 let[@inline] clear_chunk_ (c : Chunk.t) = c.off <- 0
 
@@ -43,27 +49,51 @@ let clear (self : t) =
   self.reuse_chunks <- self.prev_chunks;
   self.prev_chunks <- []
 
-let reset (self : t) =
+let[@inline] reset (self : t) =
   clear_chunk_ self.cur;
   self.prev_chunks <- []
 
-let rec list_rev_iter_ f st l =
+let[@unroll 2] rec list_rev_iter_ f st l =
   match l with
   | [] -> ()
   | x :: tl ->
     list_rev_iter_ f st tl;
     f st x
 
-let iter_chunks (self : t) yield : unit =
-  list_rev_iter_ (fun k c -> k c.bs 0 c.off) yield self.prev_chunks;
+let[@inline] iter_chunks (self : t) yield : unit =
+  if self.prev_chunks != [] then
+    list_rev_iter_ (fun k c -> k c.bs 0 c.off) yield self.prev_chunks;
   yield self.cur.bs 0 self.cur.off
+
+module To_string_ = struct
+  type state = {
+    res: bytes;
+    mutable off: int;
+  }
+
+  let add_chunk (self : state) (c : Chunk.t) : unit =
+    Bytes.blit c.bs 0 self.res self.off c.off;
+    self.off <- self.off + c.off
+
+  let to_string (self : state) : string =
+    assert (self.off = Bytes.length self.res);
+    Bytes.unsafe_to_string self.res
+end
+
+let to_string (self : t) : string =
+  let size = total_size self in
+  let st = { To_string_.res = Bytes.create size; off = 0 } in
+  if self.prev_chunks != [] then
+    list_rev_iter_ To_string_.add_chunk st self.prev_chunks;
+  To_string_.add_chunk st self.cur;
+  To_string_.to_string st
 
 (* ### encoding proper ### *)
 
 external encode_uint_with_high :
   bytes ->
   (int[@untagged]) ->
-  (int[@untagged]) ->
+  high:(int[@untagged]) ->
   (int[@untagged]) ->
   (int[@untagged]) = "caml_ccbor_encode_uint_byte" "caml_ccbor_encode_uint"
   [@@noalloc]
@@ -84,7 +114,7 @@ let[@inline never] alloc_new_chunk_ (self : t) : chunk =
   self.prev_chunks <- self.cur :: self.prev_chunks;
   let c =
     match self.reuse_chunks with
-    | [] -> Chunk.create ()
+    | [] -> Chunk.create ~size:self.chunk_size ()
     | c :: tl ->
       (* reuse [c] *)
       self.reuse_chunks <- tl;
@@ -138,12 +168,12 @@ let[@inline] int (self : t) (i : int) =
   let size = encode_int c.bs c.off (Int64.of_int i) in
   c.off <- c.off + size
 
-let add_int_unsigned (self : t) high (i : int) : unit =
+let add_int_unsigned (self : t) ~high (i : int) : unit =
   let c = get_space_for_small_ self 9 in
-  let size = encode_uint_with_high c.bs c.off high i in
+  let size = encode_uint_with_high c.bs c.off ~high i in
   c.off <- c.off + size
 
-let rec add_bytes (self : t) bs i len : unit =
+let rec add_bytes_slice_ (self : t) bs i len : unit =
   if len > 0 then (
     let chunk = get_chunk_with_space self in
     let free = Chunk.free_size_ chunk in
@@ -156,67 +186,65 @@ let rec add_bytes (self : t) bs i len : unit =
       Bytes.blit bs i chunk.bs chunk.off free;
       chunk.off <- chunk.off + free;
       (* write the rest recursively *)
-      add_bytes self bs (i + free) (len - free)
+      add_bytes_slice_ self bs (i + free) (len - free)
     )
   )
 
-let bytes self bs i len : unit =
-  add_int_unsigned self 2 len;
-  add_bytes self bs i len
+let bytes_sub self bs i len : unit =
+  add_int_unsigned self ~high:2 len;
+  add_bytes_slice_ self bs i len
+
+let bytes self b = bytes_sub self b 0 (Bytes.length b)
 
 let text_sub self s i len : unit =
-  add_int_unsigned self 3 len;
-  add_bytes self (Bytes.unsafe_of_string s) i len
+  add_int_unsigned self ~high:3 len;
+  add_bytes_slice_ self (Bytes.unsafe_of_string s) i len
 
-let text self s : unit = text_sub self s 0 (String.length s)
+let[@inline] text self s : unit = text_sub self s 0 (String.length s)
 
-let array_enter (self : t) (n : int) : unit = add_int_unsigned self 4 n
+let[@inline] array_enter (self : t) (n : int) : unit =
+  add_int_unsigned self ~high:4 n
 
-let map_enter (self : t) (n : int) : unit = add_int_unsigned self 5 n
+let[@inline] map_enter (self : t) (n : int) : unit =
+  add_int_unsigned self ~high:5 n
 
-(* TODO: simple *)
-(* TODO: float *)
-(* TODO: tag *)
+let[@inline] simple (self : t) (x : int) : unit =
+  add_int_unsigned self ~high:7 x
 
-(*
+let float (self : t) (f : float) : unit =
+  add_first_byte self 7 27;
+  let c = get_space_for_small_ self 8 in
+  Bytes.set_int64_be c.bs c.off (Int64.bits_of_float f);
+  c.off <- c.off + 8
 
-  let rec encode_val (self : t) : unit =
-    match self with
-    | `Simple i ->
-      if i < 24 then
-        add_first_byte 7 i
-      else if i <= 0xff then (
-        add_first_byte 7 24;
-        Buffer.add_char buf (Char.unsafe_chr i)
-      ) else
-        failwith "cbor: simple value too high (above 255)"
-    | `Float f ->
-      add_first_byte 7 27;
-      (* float 64 *)
-      add_i64 (Int64.bits_of_float f)
-    | `Array l ->
-      add_uint 4 (Int64.of_int (List.length l));
-      List.iter encode_val l
-    | `Map l ->
-      add_uint 5 (Int64.of_int (List.length l));
-      List.iter
-        (fun (k, v) ->
-          encode_val k;
-          encode_val v)
-        l
-    | `Tag (t, v) ->
-      add_uint 6 (Int64.of_int t);
-      encode_val v
-    | `Int i ->
-      if i >= Int64.zero then
-        add_uint 0 i
-      else if Int64.(add min_int 2L) > i then (
-        (* large negative int, be careful. encode [(-i)-1] via int64. *)
-        add_first_byte 1 27;
-        Buffer.add_int64_be buf Int64.(neg (add 1L i))
-      ) else
-        add_uint 1 Int64.(sub (neg i) one)
-  in
-  encode_val self;
-  Buffer.contents buf
-  *)
+let[@inline] tag_enter (self : t) (tag : int) : unit =
+  add_int_unsigned self ~high:6 tag
+
+let rec add_tree (self : t) (t : Tree.t) : unit =
+  match t with
+  | Tree.Null -> null self
+  | Tree.Undefined -> undefined self
+  | Tree.Simple i -> simple self i
+  | Tree.Bool b -> bool self b
+  | Tree.Int i -> int64 self i
+  | Tree.Float f -> float self f
+  | Tree.Bytes b ->
+    let b = Bytes.unsafe_of_string b in
+    bytes self b
+  | Tree.Text s -> text self s
+  | Tree.Array a ->
+    array_enter self (Array.length a);
+    for i = 0 to Array.length a - 1 do
+      let x = Array.unsafe_get a i in
+      add_tree self x
+    done
+  | Tree.Map m ->
+    map_enter self (Array.length m);
+    for i = 0 to Array.length m - 1 do
+      let k, v = Array.unsafe_get m i in
+      add_tree self k;
+      add_tree self v
+    done
+  | Tree.Tag (tag, t) ->
+    tag_enter self tag;
+    add_tree self t

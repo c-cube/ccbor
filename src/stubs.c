@@ -42,11 +42,11 @@ static int encode_uint_with_mask(char *bs, int high, uint64_t x) {
 }
 
 static int encode_int(char *bs, int64_t x) {
-  int high = 1;
+  int high = 0;
   uint64_t ux;
 
   if (x < 0) {
-    high = 0;
+    high = 1;
     ux = (uint64_t)(-x - 1);
 
   } else {
@@ -56,7 +56,7 @@ static int encode_int(char *bs, int64_t x) {
   return encode_uint_with_mask(bs, high, ux);
 }
 
-int caml_ccbor_encode_int(value bs_, int off, int64_t x) {
+intnat caml_ccbor_encode_int(value bs_, intnat off, int64_t x) {
   char *bs = Bytes_val(bs_);
   return encode_int(bs + off, x);
 }
@@ -67,15 +67,15 @@ value caml_ccbor_encode_int_byte(value bs_, value off_, value x_) {
   CAMLreturn(x);
 }
 
-int caml_ccbor_encode_uint(value bs_, int off, int high, int64_t x) {
+intnat caml_ccbor_encode_uint(value bs_, intnat off, intnat high, intnat x) {
   char *bs = Bytes_val(bs_);
-  return encode_uint_with_mask(bs + off, high, x);
+  return (long)encode_uint_with_mask(bs + off, high, x);
 }
 
 value caml_ccbor_encode_uint_byte(value bs_, value off_, value high_,
                                   value x_) {
   CAMLparam4(bs_, off_, high_, x_);
   int x = encode_uint_with_mask(Bytes_val(bs_) + Int_val(off_), Int_val(high_),
-                                Int64_val(x_));
-  CAMLreturn(x);
+                                Int_val(x_));
+  CAMLreturn(Val_int(x));
 }
