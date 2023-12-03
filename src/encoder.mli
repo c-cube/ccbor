@@ -2,6 +2,8 @@ type t
 
 val create : unit -> t
 
+val clear : t -> unit
+
 val reset : t -> unit
 
 val iter_chunks : t -> (bytes -> int -> int -> unit) -> unit

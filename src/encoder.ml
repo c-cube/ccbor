@@ -8,6 +8,7 @@ type t = {
   mutable cur: chunk;  (** Current chunk, not full *)
   mutable prev_chunks: chunk list;
       (** list of previous chunks, most recent first *)
+  mutable reuse_chunks: chunk list;  (** Chunks we can reuse *)
 }
 
 (** chunks of 1kiB *)
@@ -31,10 +32,19 @@ let total_size (self : t) : int =
     (fun acc c -> acc + Chunk.size c)
     (Chunk.size self.cur) self.prev_chunks
 
-let create () : t = { cur = Chunk.create (); prev_chunks = [] }
+let create () : t =
+  { cur = Chunk.create (); prev_chunks = []; reuse_chunks = [] }
+
+let[@inline] clear_chunk_ (c : Chunk.t) = c.off <- 0
+
+let clear (self : t) =
+  clear_chunk_ self.cur;
+  List.iter clear_chunk_ self.prev_chunks;
+  self.reuse_chunks <- self.prev_chunks;
+  self.prev_chunks <- []
 
 let reset (self : t) =
-  self.cur.off <- 0;
+  clear_chunk_ self.cur;
   self.prev_chunks <- []
 
 let rec list_rev_iter_ f st l =
@@ -50,9 +60,36 @@ let iter_chunks (self : t) yield : unit =
 
 (* ### encoding proper ### *)
 
+external encode_uint_with_high :
+  bytes ->
+  (int[@untagged]) ->
+  (int[@untagged]) ->
+  (int[@untagged]) ->
+  (int[@untagged]) = "caml_ccbor_encode_uint_byte" "caml_ccbor_encode_uint"
+  [@@noalloc]
+(** [encode_int b off high i] encodes [i] at offset [off]
+    in [b] with high mask [high].
+    This assumes there's at least [9] bytes available
+    in [b]. Returns how many bytes were written. *)
+
+external encode_int :
+  bytes -> (int[@untagged]) -> (int64[@unboxed]) -> (int[@untagged])
+  = "caml_ccbor_encode_int_byte" "caml_ccbor_encode_int"
+  [@@noalloc]
+(** [encode_int b off i] encodes [i] at offset [off]
+    in [b]. This assumes there's at least [9] bytes available
+    in [b]. Returns how many bytes were written. *)
+
 let[@inline never] alloc_new_chunk_ (self : t) : chunk =
   self.prev_chunks <- self.cur :: self.prev_chunks;
-  let c = Chunk.create () in
+  let c =
+    match self.reuse_chunks with
+    | [] -> Chunk.create ()
+    | c :: tl ->
+      (* reuse [c] *)
+      self.reuse_chunks <- tl;
+      c
+  in
   self.cur <- c;
   c
 
@@ -66,7 +103,7 @@ let[@inline] get_space_for_small_ (self : t) (n : int) : chunk =
   else
     self.cur
 
-let[@inline] get_chunk (self : t) : chunk =
+let[@inline] get_chunk_with_space (self : t) : chunk =
   if Chunk.has_space_ self.cur then
     self.cur
   else
@@ -82,21 +119,6 @@ let add_first_byte (self : t) (high : int) (low : int) : unit =
   assert (i land 0xff == i);
   add_byte self (Char.unsafe_chr i)
 
-let[@inline] add_int16 (self : t) (i : int) : unit =
-  let chunk = get_space_for_small_ self 2 in
-  Bytes.set_int16_be chunk.bs chunk.off i;
-  chunk.off <- chunk.off + 2
-
-let[@inline] add_int32 (self : t) (i : int32) : unit =
-  let chunk = get_space_for_small_ self 4 in
-  Bytes.set_int32_be chunk.bs chunk.off i;
-  chunk.off <- chunk.off + 4
-
-let[@inline] add_int64 (self : t) (i : int64) : unit =
-  let chunk = get_space_for_small_ self 8 in
-  Bytes.set_int64_be chunk.bs chunk.off i;
-  chunk.off <- chunk.off + 8
-
 external int_of_bool : bool -> int = "%identity"
 
 let[@inline] bool self (b : bool) : unit =
@@ -106,53 +128,24 @@ let[@inline] null self = add_first_byte self 7 22
 
 let[@inline] undefined self = add_first_byte self 7 23
 
-(** Add unsigned integer, including first tag byte *)
-let add_int_unsigned (self : t) (high : int) (x : int) =
-  assert (x >= 0);
-  if x < 24 then
-    add_first_byte self high x
-  else if x <= 0xff then (
-    add_first_byte self high 24;
-    add_byte self (Char.unsafe_chr x)
-  ) else if x <= 0xff_ff then (
-    add_first_byte self high 25;
-    add_int16 self x
-  ) else if x <= 0xff_ff_ff_ff then (
-    add_first_byte self high 26;
-    add_int32 self (Int32.of_int x)
-  ) else (
-    add_first_byte self high 27;
-    add_int64 self (Int64.of_int x)
-  )
+let[@inline] int64 (self : t) (i : int64) : unit =
+  let c = get_space_for_small_ self 9 in
+  let size = encode_int c.bs c.off i in
+  c.off <- c.off + size
 
-(** Add unsigned integer, including first tag byte *)
-let add_int64_unsigned (self : t) (high : int) (x : int64) =
-  assert (x >= 0L);
-  if x > 0xff_ff_ff_ffL then (
-    add_first_byte self high 27;
-    add_int64 self x
-  ) else
-    add_int_unsigned self high (Int64.to_int x)
+let[@inline] int (self : t) (i : int) =
+  let c = get_space_for_small_ self 9 in
+  let size = encode_int c.bs c.off (Int64.of_int i) in
+  c.off <- c.off + size
 
-let int64 (self : t) (i : int64) : unit =
-  if Int64.(add min_int 2L) > i then (
-    (* large negative int, be careful. encode [(-i)-1] via int64. *)
-    add_first_byte self 1 27;
-    add_int64 self Int64.(neg (add 1L i))
-  ) else if i >= 0L then
-    add_int64_unsigned self 1 i
-  else
-    add_int64_unsigned self 1 Int64.(sub (neg i) one)
-
-let int (self : t) (i : int) =
-  if i < 0 then
-    add_int_unsigned self 1 (-i - 1)
-  else
-    add_int_unsigned self 0 i
+let add_int_unsigned (self : t) high (i : int) : unit =
+  let c = get_space_for_small_ self 9 in
+  let size = encode_uint_with_high c.bs c.off high i in
+  c.off <- c.off + size
 
 let rec add_bytes (self : t) bs i len : unit =
   if len > 0 then (
-    let chunk = get_chunk self in
+    let chunk = get_chunk_with_space self in
     let free = Chunk.free_size_ chunk in
     if len <= free then (
       (* can do it in one go *)

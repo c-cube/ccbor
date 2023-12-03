@@ -1,8 +1,8 @@
 (library
   (public_name ccbor)
-  ;(foreign_stubs
-  ;  (language c)
-  ;  (flags :standard -std=c99 -O2)
-  ;  (names stubs))
+  (foreign_stubs
+    (language c)
+    (flags :standard -std=c99 -O2)
+    (names stubs))
   (ocamlopt_flags :standard -inline 100))
 
