@@ -54,7 +54,7 @@ let bench ~n ~depth : B.Tree.t =
 
           let enc = Ccbor.Encoder.create () in
           let run_ccbor enc () =
-            Ccbor.Encoder.reset enc;
+            Ccbor.Encoder.clear enc;
             ccbor_encode enc ~n ~depth
           in
 
