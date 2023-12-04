@@ -226,7 +226,8 @@ let rec add_tree (self : t) (t : Tree.t) : unit =
   | Tree.Undefined -> undefined self
   | Tree.Simple i -> simple self i
   | Tree.Bool b -> bool self b
-  | Tree.Int i -> int64 self i
+  | Tree.Int i -> int self i
+  | Tree.Int64 i -> int64 self i
   | Tree.Float f -> float self f
   | Tree.Bytes b ->
     let b = Bytes.unsafe_of_string b in
