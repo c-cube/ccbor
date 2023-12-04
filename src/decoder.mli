@@ -4,6 +4,10 @@ val create : bytes -> t
 
 val create_sub : bytes -> int -> int -> t
 
+val create_string : string -> t
+
+val create_string_sub : string -> int -> int -> t
+
 type token =
   | True
   | False

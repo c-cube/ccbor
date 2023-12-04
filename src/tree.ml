@@ -3,7 +3,8 @@ type t =
   | Undefined
   | Simple of int
   | Bool of bool
-  | Int of int64
+  | Int of int
+  | Int64 of int64
   | Float of float
   | Bytes of string
   | Text of string
@@ -32,7 +33,8 @@ let rec pp out (self : t) =
   | Undefined -> Format.pp_print_string out "undefined"
   | Simple i -> Format.fprintf out "simple(%d)" i
   | Bool b -> Format.pp_print_bool out b
-  | Int i -> Format.fprintf out "%Ld" i
+  | Int i -> Format.fprintf out "%d" i
+  | Int64 i -> Format.fprintf out "%LdL" i
   | Float f -> Format.pp_print_float out f
   | Bytes s -> Format.fprintf out "h'%s'" (hex_of_string s)
   | Text s -> Format.fprintf out "%S" s

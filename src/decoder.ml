@@ -12,32 +12,33 @@ let create_sub b i len =
 
 let create b : t = create_sub b 0 (Bytes.length b)
 
-let[@inline] check_non_empty (self : t) : unit =
-  if self.i >= self.last then raise End_of_file
+let create_string s : t = create (Bytes.unsafe_of_string s)
+
+let create_string_sub s i len : t = create_sub (Bytes.unsafe_of_string s) i len
 
 let[@inline] check_has_at_least (self : t) n : unit =
   if self.i + n > self.last then raise End_of_file
 
 let[@inline] read_i8 (self : t) =
-  check_non_empty self;
+  (* check_has_at_least self 1; *)
   let c = Char.code (Bytes.get self.b self.i) in
   self.i <- 1 + self.i;
   c
 
-let[@inline] read_i16 (self : t) =
-  check_has_at_least self 2;
+let read_i16 (self : t) =
+  (* check_has_at_least self 2; *)
   let c = Bytes.get_uint16_be self.b self.i in
   self.i <- self.i + 2;
   c
 
 let[@inline] read_i32 (self : t) =
-  check_has_at_least self 4;
+  (* check_has_at_least self 4; *)
   let c = Bytes.get_int32_be self.b self.i in
   self.i <- self.i + 4;
   c
 
 let[@inline] read_i64 (self : t) =
-  check_has_at_least self 8;
+  (* check_has_at_least self 8; *)
   let c = Bytes.get_int64_be self.b self.i in
   self.i <- self.i + 8;
   c
@@ -48,6 +49,9 @@ let[@inline] i64_to_int i =
     j
   else
     failwith "int64 does not fit in int"
+
+let[@inline] int64_fits_in_int_ (i : int64) : bool =
+  Int64.(of_int (to_int i) = i)
 
 let[@inline] int_is_small ~low : bool = low <= 25
 
@@ -172,11 +176,20 @@ let next_token (self : t) : token =
   | 0 ->
     if int_is_small ~low then
       Int (read_small_int self ~low)
-    else
-      Int64 (read_int64 self ~allow_indefinite:false ~low)
+    else (
+      let i = read_int64 self ~allow_indefinite:false ~low in
+      if int64_fits_in_int_ i then
+        Int (Int64.to_int i)
+      else
+        Int64 i
+    )
   | 1 ->
     let i = read_int64 self ~allow_indefinite:false ~low in
-    Int64 Int64.(sub minus_one i)
+    let i = Int64.(sub minus_one i) in
+    if int64_fits_in_int_ i then
+      Int (Int64.to_int i)
+    else
+      Int64 i
   | 2 -> read_bytes self ~ty:T_bytes ~low
   | 3 -> read_bytes self ~ty:T_text ~low
   | 4 -> read_array self ~low
@@ -234,8 +247,8 @@ let rec read_tree (self : t) : Tree.t =
   | False -> T.Bool false
   | Null -> T.Null
   | Undefined -> T.Undefined
-  | Int i -> T.Int (Int64.of_int i)
-  | Int64 i -> T.Int i
+  | Int i -> T.Int i
+  | Int64 i -> T.Int64 i
   | Simple i -> T.Simple i
   | Float f -> T.Float f
   | Bytes (b, i, len) -> T.Bytes (bytes_sub_ b i len |> Bytes.unsafe_to_string)
@@ -249,61 +262,73 @@ let rec read_tree (self : t) : Tree.t =
   | Tag i ->
     let v = read_tree self in
     T.Tag (i, v)
-  | (Bytes_indefinite_start | Text_indefinite_start) as tok ->
-    let buf = Buffer.create 32 in
-    while
-      match next_token self with
-      | Text (b, i, len) | Bytes (b, i, len) ->
-        Buffer.add_subbytes buf b i len;
-        true
-      | Indefinite_end -> false
-      | _ -> failwith "unexpected token in indefinite text"
-    do
-      ()
-    done;
-    if tok == Bytes_indefinite_start then
-      T.Bytes (Buffer.contents buf)
-    else
-      T.Text (Buffer.contents buf)
+  | Bytes_indefinite_start ->
+    let s = read_bytes_indefinite self in
+    T.Bytes s
+  | Text_indefinite_start ->
+    let s = read_bytes_indefinite self in
+    T.Text s
   | Array_indefinite_start ->
-    let l = ref [] in
-    while
-      match read_tree self with
-      | exception Indefinite -> false
-      | x ->
-        l := x :: !l;
-        true
-    do
-      ()
-    done;
-    let a = Array.of_list !l in
-    array_rev_in_place a;
+    let a = read_array_indefinite self in
     T.Array a
   | Map_indefinite_start ->
-    let l = ref [] in
-    let key = ref None in
-    while
-      match read_tree self with
-      | exception Indefinite -> false
-      | x ->
-        (match !key with
-        | None -> key := Some x
-        | Some k ->
-          key := None;
-          l := (k, x) :: !l);
-        true
-    do
-      ()
-    done;
-    let a = Array.of_list !l in
-    array_rev_in_place a;
-    T.Map a
+    let m = read_map_indefinite self in
+    T.Map m
   | Indefinite_end -> raise Indefinite
 
 and read_kv (self : t) =
   let k = read_tree self in
   let v = read_tree self in
   k, v
+
+and read_bytes_indefinite (self : t) : string =
+  let buf = Buffer.create 32 in
+  while
+    match next_token self with
+    | Text (b, i, len) | Bytes (b, i, len) ->
+      Buffer.add_subbytes buf b i len;
+      true
+    | Indefinite_end -> false
+    | _ -> failwith "unexpected token in indefinite text"
+  do
+    ()
+  done;
+  Buffer.contents buf
+
+and read_array_indefinite (self : t) : _ array =
+  let l = ref [] in
+  while
+    match read_tree self with
+    | exception Indefinite -> false
+    | x ->
+      l := x :: !l;
+      true
+  do
+    ()
+  done;
+  let a = Array.of_list !l in
+  array_rev_in_place a;
+  a
+
+and read_map_indefinite (self : t) : _ array =
+  let l = ref [] in
+  let key = ref None in
+  while
+    match read_tree self with
+    | exception Indefinite -> false
+    | x ->
+      (match !key with
+      | None -> key := Some x
+      | Some k ->
+        key := None;
+        l := (k, x) :: !l);
+      true
+  do
+    ()
+  done;
+  let m = Array.of_list !l in
+  array_rev_in_place m;
+  m
 
 let rec skip_tree (self : t) : unit =
   let module T = Tree in

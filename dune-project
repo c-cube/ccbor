@@ -11,4 +11,5 @@
   (depends
     dune
     (ocaml (>= 4.08))
-    (containers (and (>= 3.0) :with-test))))
+    (containers (and (>= 3.0) :with-test))
+    (qcheck-core (and (>= 0.14) :with-test))))

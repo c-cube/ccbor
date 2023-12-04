@@ -1,0 +1,4 @@
+
+(test
+  (name tests)
+  (libraries ccbor ccbor_reference qcheck-core qcheck-core.runner))

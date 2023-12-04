@@ -39,38 +39,86 @@ let rec ccbor_encode (enc : Ccbor.Encoder.t) ~n ~depth : unit =
     enc_rec enc i
   done
 
-let bench ~n ~depth : B.Tree.t =
-  B.Tree.(
-    spf "n=%n,d=%d" n depth
-    @> lazy
-         (let v = mk_val ~n ~depth in
-          let str = CB_ref.encode v in
-          Printf.printf "size for n=%d, depth=%d: %d B\n" n depth
-            (String.length str);
+let ccbor_decode_skip (dec : Ccbor.Decoder.t) : unit =
+  let module CD = Ccbor.Decoder in
+  CD.skip_tree dec
 
-          let run_ref v () =
-            ignore (Sys.opaque_identity (CB_ref.encode v) : string)
-          in
+module Enc = struct
+  let bench ~n ~depth : B.Tree.t =
+    B.Tree.(
+      spf "n=%n,d=%d" n depth
+      @> lazy
+           (let v = mk_val ~n ~depth in
+            let str = CB_ref.encode v in
+            Printf.printf "size for n=%d, depth=%d: %d B\n" n depth
+              (String.length str);
 
-          let enc = Ccbor.Encoder.create () in
-          let run_ccbor enc () =
-            Ccbor.Encoder.reset enc;
-            ccbor_encode enc ~n ~depth
-          in
+            let run_ref v () =
+              ignore (Sys.opaque_identity (CB_ref.encode v) : string)
+            in
 
-          run_ccbor enc ();
-          Printf.printf "ccbor size for n=%d, depth=%d: %d B\n" n depth
-            (Ccbor.Encoder.total_size enc);
+            let enc = Ccbor.Encoder.create () in
+            let run_ccbor enc () =
+              Ccbor.Encoder.clear enc;
+              ccbor_encode enc ~n ~depth
+            in
 
-          B.throughputN ~repeat:2 3
-            [ "ref", run_ref v, (); "ccbor", run_ccbor enc, () ]))
+            run_ccbor enc ();
+            Printf.printf "ccbor size for n=%d, depth=%d: %d B\n" n depth
+              (Ccbor.Encoder.total_size enc);
 
-let () =
-  B.Tree.(
-    register @@ "enc"
-    @>> concat
-          (List.map
-             (fun (n, depth) -> bench ~n ~depth)
-             [ 1, 1; 2, 1; 2, 2; 2, 3; 10, 1; 10, 2; 10, 3; 100, 1; 100, 2 ]))
+            B.throughputN ~repeat:2 3
+              [ "ref", run_ref v, (); "ccbor", run_ccbor enc, () ]))
+
+  let () =
+    B.Tree.(
+      register @@ "enc"
+      @>> concat
+            (List.map
+               (fun (n, depth) -> bench ~n ~depth)
+               [ 1, 1; 2, 1; 2, 2; 2, 3; 10, 1; 10, 2; 10, 3; 100, 1; 100, 2 ]))
+end
+
+module Dec = struct
+  let bench ~n ~depth : B.Tree.t =
+    B.Tree.(
+      spf "n=%n,d=%d" n depth
+      @> lazy
+           (let v = mk_val ~n ~depth in
+            let str = CB_ref.encode v in
+            Printf.printf "size for n=%d, depth=%d: %d B\n" n depth
+              (String.length str);
+
+            let run_ref str () =
+              ignore (Sys.opaque_identity (CB_ref.decode_exn str) : CB_ref.t)
+            in
+
+            let run_ccbor_tree str () : unit =
+              let dec = Ccbor.Decoder.create_string str in
+              ignore
+                (Sys.opaque_identity
+                   (Ccbor.Decoder.read_tree dec : Ccbor.Tree.t))
+            in
+
+            let run_ccbor_skip str () : unit =
+              let dec = Ccbor.Decoder.create_string str in
+              Sys.opaque_identity (ccbor_decode_skip dec)
+            in
+
+            B.throughputN ~repeat:2 3
+              [
+                "ref", run_ref str, ();
+                "ccbor_tree", run_ccbor_tree str, ();
+                "ccbor_skip", run_ccbor_skip str, ();
+              ]))
+
+  let () =
+    B.Tree.(
+      register @@ "dec"
+      @>> concat
+            (List.map
+               (fun (n, depth) -> bench ~n ~depth)
+               [ 1, 1; 2, 1; 2, 2; 2, 3; 10, 1; 10, 2; 10, 3; 100, 1; 100, 2 ]))
+end
 
 let () = B.Tree.(run_global ())
