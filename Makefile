@@ -7,7 +7,7 @@ clean:
 	@dune clean
 
 test:
-	@dune runtest $(DUNE_OPTS)
+	@dune runtest $(DUNE_OPTS) -f
 
 doc:
 	@dune build $(DUNE_OPTS) @doc
@@ -17,7 +17,7 @@ build-dev:
 
 WATCH?= @check @runtest
 watch:
-	dune build $(DUNE_OPTS) -w $(WATCH)
+	dune build $(DUNE_OPTS) -w $(WATCH) -f
 
 DUNE_OPTS_BENCH?=--profile=release
 

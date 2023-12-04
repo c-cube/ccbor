@@ -111,12 +111,32 @@ let gen_tree : C.Tree.t Q.Gen.t =
     in
     let rec_ =
       [
-        (1, array_size (0 -- 15) (self_ (depth / 2)) >|= fun a -> T.Array a);
         ( 1,
-          array_size (0 -- 15) (pair (self_ 0) (self_ (depth / 3))) >|= fun m ->
+          0 -- 129 >>= fun size ->
+          let depth =
+            if size < 5 then
+              depth - 1
+            else if size < 30 then
+              depth / 2
+            else
+              0
+          in
+          array_size (return size) (self_ depth) >|= fun a -> T.Array a );
+        ( 1,
+          0 -- 129 >>= fun size ->
+          let depth =
+            if size < 5 then
+              depth - 1
+            else if size < 30 then
+              depth / 2
+            else
+              0
+          in
+          array_size (return size) (pair (self_ 0) (self_ depth)) >|= fun m ->
           T.Map m );
         ( 1,
-          0 -- 500 >>= fun tag ->
+          int >>= fun tag ->
+          let tag = abs tag in
           self_ (depth - 1) >|= fun sub -> T.Tag (tag, sub) );
       ]
     in
