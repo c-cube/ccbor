@@ -89,7 +89,7 @@ module Dec = struct
             Printf.printf "size for n=%d, depth=%d: %d B\n" n depth
               (String.length str);
 
-            let run_ref v () =
+            let run_ref str () =
               ignore (Sys.opaque_identity (CB_ref.decode_exn str) : CB_ref.t)
             in
 
@@ -107,7 +107,7 @@ module Dec = struct
 
             B.throughputN ~repeat:2 3
               [
-                "ref", run_ref v, ();
+                "ref", run_ref str, ();
                 "ccbor_tree", run_ccbor_tree str, ();
                 "ccbor_skip", run_ccbor_skip str, ();
               ]))
