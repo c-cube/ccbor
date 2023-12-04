@@ -22,6 +22,12 @@ let hex_of_string (s : string) : string =
   done;
   Bytes.unsafe_to_string res
 
+let tree_of_int64_ i =
+  if Int64.(of_int (to_int i) = i) then
+    C.Tree.Int (Int64.to_int i)
+  else
+    C.Tree.Int64 i
+
 module Util_tree = struct
   open C.Tree
 
@@ -33,7 +39,8 @@ module Util_tree = struct
     | Null | Undefined | Simple _ | Bool false -> empty
     | Float _ -> empty
     | Bool true -> return (Bool false)
-    | Int i -> Q.Shrink.int64 i >|= fun i -> Int i
+    | Int i -> Q.Shrink.int i >|= fun i -> Int i
+    | Int64 i -> Q.Shrink.int64 i >|= fun i -> tree_of_int64_ i
     | Bytes s -> Q.Shrink.string s >|= fun s -> Bytes s
     | Text s -> Q.Shrink.string s >|= fun s -> Text s
     | Array a ->
@@ -64,7 +71,7 @@ module Util_tree = struct
     | `Map m -> Map (Array.of_list m |> Array.map (CCPair.map_same of_ref))
     | `Bytes s -> Bytes s
     | `Float f -> Float f
-    | `Int i -> Int i
+    | `Int i -> tree_of_int64_ i
     | `Undefined -> Undefined
     | `Text s -> Text s
 
@@ -78,7 +85,8 @@ module Util_tree = struct
     | Map m -> `Map (Array.to_list m |> List.map (CCPair.map_same to_ref))
     | Bytes s -> `Bytes s
     | Float f -> `Float f
-    | Int i -> `Int i
+    | Int i -> `Int (Int64.of_int i)
+    | Int64 i -> `Int i
     | Undefined -> `Undefined
     | Text s -> `Text s
 end
@@ -94,7 +102,8 @@ let gen_tree : C.Tree.t Q.Gen.t =
         1, return T.Undefined;
         (1, float >|= fun f -> T.Float f);
         (1, bool >|= fun b -> T.Bool b);
-        (2, -1000 -- 1000 >|= fun x -> T.Int (Int64.of_int x));
+        (2, int >|= fun x -> T.Int x);
+        1, oneofl [ T.Int64 Int64.max_int; T.Int64 Int64.min_int ];
         (2, 0 -- 19 >|= fun x -> T.Simple x);
         (2, string_size ~gen:printable (0 -- 300) >|= fun s -> T.Text s);
         (2, string_size (0 -- 300) >|= fun s -> T.Bytes s);
