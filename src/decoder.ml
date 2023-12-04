@@ -262,61 +262,73 @@ let rec read_tree (self : t) : Tree.t =
   | Tag i ->
     let v = read_tree self in
     T.Tag (i, v)
-  | (Bytes_indefinite_start | Text_indefinite_start) as tok ->
-    let buf = Buffer.create 32 in
-    while
-      match next_token self with
-      | Text (b, i, len) | Bytes (b, i, len) ->
-        Buffer.add_subbytes buf b i len;
-        true
-      | Indefinite_end -> false
-      | _ -> failwith "unexpected token in indefinite text"
-    do
-      ()
-    done;
-    if tok == Bytes_indefinite_start then
-      T.Bytes (Buffer.contents buf)
-    else
-      T.Text (Buffer.contents buf)
+  | Bytes_indefinite_start ->
+    let s = read_bytes_indefinite self in
+    T.Bytes s
+  | Text_indefinite_start ->
+    let s = read_bytes_indefinite self in
+    T.Text s
   | Array_indefinite_start ->
-    let l = ref [] in
-    while
-      match read_tree self with
-      | exception Indefinite -> false
-      | x ->
-        l := x :: !l;
-        true
-    do
-      ()
-    done;
-    let a = Array.of_list !l in
-    array_rev_in_place a;
+    let a = read_array_indefinite self in
     T.Array a
   | Map_indefinite_start ->
-    let l = ref [] in
-    let key = ref None in
-    while
-      match read_tree self with
-      | exception Indefinite -> false
-      | x ->
-        (match !key with
-        | None -> key := Some x
-        | Some k ->
-          key := None;
-          l := (k, x) :: !l);
-        true
-    do
-      ()
-    done;
-    let a = Array.of_list !l in
-    array_rev_in_place a;
-    T.Map a
+    let m = read_map_indefinite self in
+    T.Map m
   | Indefinite_end -> raise Indefinite
 
 and read_kv (self : t) =
   let k = read_tree self in
   let v = read_tree self in
   k, v
+
+and read_bytes_indefinite (self : t) : string =
+  let buf = Buffer.create 32 in
+  while
+    match next_token self with
+    | Text (b, i, len) | Bytes (b, i, len) ->
+      Buffer.add_subbytes buf b i len;
+      true
+    | Indefinite_end -> false
+    | _ -> failwith "unexpected token in indefinite text"
+  do
+    ()
+  done;
+  Buffer.contents buf
+
+and read_array_indefinite (self : t) : _ array =
+  let l = ref [] in
+  while
+    match read_tree self with
+    | exception Indefinite -> false
+    | x ->
+      l := x :: !l;
+      true
+  do
+    ()
+  done;
+  let a = Array.of_list !l in
+  array_rev_in_place a;
+  a
+
+and read_map_indefinite (self : t) : _ array =
+  let l = ref [] in
+  let key = ref None in
+  while
+    match read_tree self with
+    | exception Indefinite -> false
+    | x ->
+      (match !key with
+      | None -> key := Some x
+      | Some k ->
+        key := None;
+        l := (k, x) :: !l);
+      true
+  do
+    ()
+  done;
+  let m = Array.of_list !l in
+  array_rev_in_place m;
+  m
 
 let rec skip_tree (self : t) : unit =
   let module T = Tree in
